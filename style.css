@@ -41,3 +41,21 @@ body.lp-lock{overflow:hidden}
 .lp-x{position:absolute;top:12px;right:12px;width:34px;height:34px;border:0;border-radius:9px;background:var(--soft);color:var(--text);font-size:20px;line-height:1}.lp-err{color:var(--red);font-size:13px;margin:12px 0 0}
 @media(max-width:900px){.lp-herogrid{grid-template-columns:1fr}.lp-copy p{max-width:none}.lp-grid{grid-template-columns:1fr}}
 @media(max-width:760px){.lp-nav{height:64px}.lp-logo img{height:54px}.lp-burger{display:grid}.lp-menu{display:none;position:absolute;top:64px;left:0;right:0;flex-direction:column;align-items:stretch;gap:2px;padding:10px 16px 16px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:var(--shadow)}.lp-nav.open .lp-menu{display:flex}.lp-menu a{padding:13px 12px}.lp-menu .btn{margin:8px 0 0;padding:13px}.lp-hero{padding-top:calc(64px + 28px)}.lp-sec{scroll-margin-top:64px}.lp-cta .btn{flex:1 1 100%}}
+
+/* Centered, fixed-width Baku time display in every lobby header. */
+.room-banner{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:16px}
+.room-title{grid-column:1;min-width:0}
+.lobby-clock-wrap{grid-column:2;justify-self:center;display:flex;align-items:center;justify-content:center;width:clamp(170px,19vw,228px);min-height:76px;padding:8px 14px;border:1px solid #20e96c;border-radius:15px;background:linear-gradient(180deg,#071910,#04120b);box-shadow:0 0 7px #20e96c35, inset 0 0 12px #20e96c12}
+.lobby-clock{display:flex;align-items:center;justify-content:center;gap:clamp(3px,.5vw,7px);font-size:clamp(38px,4vw,56px);line-height:1;color:#36f77d;font-variant-numeric:tabular-nums;white-space:nowrap;text-shadow:0 0 7px #24ff7738}
+.clock-digit{position:relative;display:inline-block;flex:0 0 .62em;width:.62em;height:1em}
+.clock-segment{position:absolute;display:block;background:#16743c;opacity:.19;transition:opacity .12s,filter .12s}
+.clock-segment.on{background:#28f574;opacity:1;filter:drop-shadow(0 0 3px #20f76d) drop-shadow(0 0 7px #20f76d55)}
+.seg-a,.seg-g,.seg-d{left:21%;width:58%;height:9%;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}
+.seg-a{top:0}.seg-g{top:45.5%}.seg-d{bottom:0}
+.seg-f,.seg-b,.seg-e,.seg-c{width:10%;height:38%;clip-path:polygon(50% 0,100% 12%,100% 88%,50% 100%,0 88%,0 12%)}
+.seg-f{left:2%;top:7%}.seg-b{right:2%;top:7%}.seg-e{left:2%;bottom:7%}.seg-c{right:2%;bottom:7%}
+.clock-colon{display:flex;flex:0 0 .16em;height:.72em;flex-direction:column;align-items:center;justify-content:space-around}
+.clock-colon i{display:block;width:.11em;height:.11em;border-radius:50%;background:#28f574;box-shadow:0 0 4px #20f76d,0 0 8px #20f76d55}
+.room-banner>.actions{grid-column:3;justify-self:end;flex-wrap:nowrap;white-space:nowrap}
+@media(max-width:900px){.room-banner{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"title clock" "actions actions";align-items:center;row-gap:14px}.room-title{grid-area:title}.lobby-clock-wrap{grid-area:clock;width:180px;min-height:68px}.room-banner>.actions{grid-area:actions;justify-self:end}}
+@media(max-width:520px){.room-banner{column-gap:8px;row-gap:12px}.room-title h2{font-size:18px}.room-title .muted{font-size:11px;line-height:1.5}.lobby-clock-wrap{width:142px;min-height:58px;padding:6px 9px;border-radius:12px}.lobby-clock{font-size:34px;gap:3px}.room-banner>.actions{width:100%;justify-content:flex-end;flex-wrap:wrap}}
