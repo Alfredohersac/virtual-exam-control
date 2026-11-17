@@ -27,7 +27,8 @@ def init():
         c.executescript('''CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, login TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('Admin','Creator','User')), status TEXT NOT NULL DEFAULT 'Active', created_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS lobbies(id INTEGER PRIMARY KEY, lobby_id TEXT UNIQUE NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, password_hash TEXT, rows INTEGER NOT NULL, columns INTEGER NOT NULL, timer_duration INTEGER NOT NULL, creator_id INTEGER NOT NULL REFERENCES users(id), status TEXT NOT NULL DEFAULT 'Active', created_at INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS seats(id INTEGER PRIMARY KEY, lobby_pk INTEGER NOT NULL REFERENCES lobbies(id) ON DELETE CASCADE, row_number INTEGER NOT NULL, column_number INTEGER NOT NULL, position INTEGER NOT NULL, started_at INTEGER, duration_seconds INTEGER, status TEXT NOT NULL DEFAULT 'Available', UNIQUE(lobby_pk,row_number,column_number,position));''')
+        CREATE TABLE IF NOT EXISTS seats(id INTEGER PRIMARY KEY, lobby_pk INTEGER NOT NULL REFERENCES lobbies(id) ON DELETE CASCADE, row_number INTEGER NOT NULL, column_number INTEGER NOT NULL, position INTEGER NOT NULL, started_at INTEGER, duration_seconds INTEGER, status TEXT NOT NULL DEFAULT 'Available', UNIQUE(lobby_pk,row_number,column_number,position));
+        CREATE TABLE IF NOT EXISTS seat_undos(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, lobby_pk INTEGER NOT NULL REFERENCES lobbies(id) ON DELETE CASCADE, seat_id INTEGER NOT NULL REFERENCES seats(id) ON DELETE CASCADE, started_at INTEGER NOT NULL, duration_seconds INTEGER NOT NULL, cleared_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);''')
         if not c.execute('SELECT 1 FROM users WHERE role="Admin"').fetchone():
             c.execute('INSERT INTO users(login,password_hash,role,created_at) VALUES(?,?,?,?)',('admin',pw_hash(os.environ.get('EXAM_ADMIN_PASSWORD','admin123')), 'Admin',int(time.time()*1000)))
 
@@ -88,6 +89,12 @@ class Handler(SimpleHTTPRequestHandler):
                     login=str(d.get('login','')).strip(); password=str(d.get('password','')); role=d.get('role')
                     if len(login)<3 or len(password)<8 or role not in ('Admin','Creator','User'): return self.send_json({'error':'Login ən azı 3, şifrə ən azı 8 simvol olmalı və rol seçilməlidir'},400)
                     c.execute('INSERT INTO users(login,password_hash,role,created_at) VALUES(?,?,?,?)',(login,pw_hash(password),role,int(time.time()*1000))); return self.send_json({'ok':True},201)
+                if path.startswith('/api/users/') and path.endswith('/password'):
+                    if u['role']!='Admin': return self.send_json({'error':'İcazə yoxdur'},403)
+                    uid=int(path.split('/')[-2]); password=str(d.get('password',''))
+                    if len(password)<8:return self.send_json({'error':'Yeni şifrə ən azı 8 simvol olmalıdır'},400)
+                    if not c.execute('SELECT 1 FROM users WHERE id=?',(uid,)).fetchone():return self.send_json({'error':'İstifadəçi tapılmadı'},404)
+                    c.execute('UPDATE users SET password_hash=? WHERE id=?',(pw_hash(password),uid));return self.send_json({'ok':True})
                 if path=='/api/lobbies':
                     if u['role'] not in ('Admin','Creator'): return self.send_json({'error':'User rolu aktiv deyil'},403)
                     name=str(d.get('name','')).strip(); typ=d.get('type'); nr=int(d.get('rows',0)); nc=int(d.get('columns',0)); mins=int(d.get('timerDuration',0)); secret=d.get('password','')
@@ -112,9 +119,31 @@ class Handler(SimpleHTTPRequestHandler):
                         if parts[4]=='seat':
                             action=d.get('action')
                             if action=='start' and seat['status']=='Available': c.execute('UPDATE seats SET status="Active",started_at=?,duration_seconds=? WHERE id=?',(int(time.time()*1000),l['timer_duration'],seat['id']))
-                            elif action=='clear': c.execute('UPDATE seats SET status="Available",started_at=NULL,duration_seconds=NULL WHERE id=?',(seat['id'],))
+                            elif action=='clear' and seat['status'] in ('Active','Expired'):
+                                now=int(time.time()*1000); token=secrets.token_urlsafe(24)
+                                c.execute('INSERT INTO seat_undos(token,user_id,lobby_pk,seat_id,started_at,duration_seconds,cleared_at,expires_at) VALUES(?,?,?,?,?,?,?,?)',(token,u['id'],l['id'],seat['id'],seat['started_at'],seat['duration_seconds'],now,now+30000))
+                                c.execute('UPDATE seats SET status="Available",started_at=NULL,duration_seconds=NULL WHERE id=?',(seat['id'],))
+                                return self.send_json({'ok':True,'undoToken':token,'undoExpiresAt':now+30000})
                             else:return self.send_json({'error':'Əməliyyat mümkün deyil'},409)
                             return self.send_json({'ok':True})
+                    if len(parts)==6 and parts[4:] == ['seat','undo']:
+                        if u['role']!='Admin' and l['creator_id']!=u['id']:return self.send_json({'error':'İcazə yoxdur'},403)
+                        token=str(d.get('token','')); now=int(time.time()*1000)
+                        undo=c.execute('SELECT * FROM seat_undos WHERE token=? AND lobby_pk=? AND user_id=? AND used_at IS NULL AND expires_at>?',(token,l['id'],u['id'],now)).fetchone()
+                        if not undo:return self.send_json({'error':'Geri qaytarma müddəti bitib'},410)
+                        seat=c.execute('SELECT * FROM seats WHERE id=? AND lobby_pk=?',(undo['seat_id'],l['id'])).fetchone()
+                        if not seat or seat['status']!='Available':return self.send_json({'error':'Oturacaq artıq dəyişdirilib'},409)
+                        c.execute('UPDATE seats SET status="Active",started_at=?,duration_seconds=? WHERE id=?',(undo['started_at']+(now-undo['cleared_at']),undo['duration_seconds'],seat['id']))
+                        c.execute('UPDATE seat_undos SET used_at=? WHERE token=?',(now,token));return self.send_json({'ok':True})
+                    if len(parts)==5 and parts[4]=='seat-swap':
+                        if u['role']!='Admin' and l['creator_id']!=u['id']:return self.send_json({'error':'İcazə yoxdur'},403)
+                        row=int(d.get('row',0)); col=int(d.get('column',0))
+                        pair=c.execute('SELECT * FROM seats WHERE lobby_pk=? AND row_number=? AND column_number=? ORDER BY position',(l['id'],row,col)).fetchall()
+                        if len(pair)!=2:return self.send_json({'error':'Parta tapılmadı'},404)
+                        a,b=pair
+                        c.execute('UPDATE seats SET status=?,started_at=?,duration_seconds=? WHERE id=?',(b['status'],b['started_at'],b['duration_seconds'],a['id']))
+                        c.execute('UPDATE seats SET status=?,started_at=?,duration_seconds=? WHERE id=?',(a['status'],a['started_at'],a['duration_seconds'],b['id']))
+                        return self.send_json({'ok':True})
                     if path.endswith('/status'):
                         if u['role']!='Admin' and l['creator_id']!=u['id']:return self.send_json({'error':'İcazə yoxdur'},403)
                         c.execute('UPDATE lobbies SET status=? WHERE id=?',('Inactive' if l['status']=='Active' else 'Active',l['id']));return self.send_json({'ok':True})
@@ -130,9 +159,23 @@ class Handler(SimpleHTTPRequestHandler):
         try:d=self.body();u=self.auth()
         except Exception:return self.send_json({'error':'Sorğu yanlışdır'},400)
         if not u:return self.send_json({'error':'Giriş tələb olunur'},401)
-        if u['role']!='Admin':return self.send_json({'error':'İcazə yoxdur'},403)
         try:
             with connect() as c:
+                if path.startswith('/api/lobbies/'):
+                    lid=path.split('/')[-1]; lobby=c.execute('SELECT * FROM lobbies WHERE lobby_id=?',(lid,)).fetchone()
+                    if not lobby:return self.send_json({'error':'Otaq tapılmadı'},404)
+                    if u['role']!='Admin' and (u['role']!='Creator' or lobby['creator_id']!=u['id']):return self.send_json({'error':'İcazə yoxdur'},403)
+                    name=str(d.get('name',lobby['name'])).strip(); typ=d.get('type',lobby['type']); nr=int(d.get('rows',lobby['rows'])); nc=int(d.get('columns',lobby['columns'])); mins=int(d.get('timerDuration',lobby['timer_duration']//60)); secret=str(d.get('password',''))
+                    if not name or typ not in ('Public','Private') or not 1<=nr<=10 or not 1<=nc<=10 or not 1<=mins<=600:return self.send_json({'error':'Otaq məlumatlarını yoxlayın'},400)
+                    changing_layout=(nr!=lobby['rows'] or nc!=lobby['columns'])
+                    if changing_layout and c.execute('SELECT 1 FROM seats WHERE lobby_pk=? AND status<>"Available" LIMIT 1',(lobby['id'],)).fetchone():return self.send_json({'error':'Oturacaqlar dolu ikən sıra və sütun sayı dəyişdirilə bilməz'},409)
+                    passhash=pw_hash(secret) if typ=='Private' and secret else lobby['password_hash'] if typ=='Private' else None
+                    if typ=='Private' and not passhash:return self.send_json({'error':'Private otaq üçün parol təyin edin'},400)
+                    c.execute('UPDATE lobbies SET name=?,type=?,password_hash=?,rows=?,columns=?,timer_duration=? WHERE id=?',(name,typ,passhash,nr,nc,mins*60,lobby['id']))
+                    if changing_layout:
+                        c.execute('DELETE FROM seats WHERE lobby_pk=?',(lobby['id'],));c.executemany('INSERT INTO seats(lobby_pk,row_number,column_number,position) VALUES(?,?,?,?)',[(lobby['id'],r,col,pos) for r in range(1,nr+1) for col in range(1,nc+1) for pos in (1,2)])
+                    return self.send_json({'ok':True})
+                if u['role']!='Admin':return self.send_json({'error':'İcazə yoxdur'},403)
                 uid=int(path.rsplit('/',1)[1]); target=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
                 if not target:return self.send_json({'error':'İstifadəçi tapılmadı'},404)
                 if target['id']==u['id'] and (d.get('status','Active')!='Active' or d.get('role',target['role'])!='Admin'):return self.send_json({'error':'Öz admin hesabınızı deaktiv və ya rolunu dəyişə bilməzsiniz'},400)
